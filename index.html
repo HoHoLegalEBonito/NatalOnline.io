@@ -2,16 +2,42 @@
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Snowman Online Battle</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Snowman Island 3D</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #87CEEB; font-family: sans-serif; }
-        #score-ui { position: absolute; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 10px; pointer-events: none; }
+        body { margin: 0; overflow: hidden; background: #87CEEB; font-family: Arial, sans-serif; }
+        canvas { display: block; }
+        
+        /* Controles Touch */
+        #ui-controls {
+            position: absolute; bottom: 20px; left: 20px;
+            display: grid; grid-template-columns: repeat(3, 60px); grid-gap: 10px;
+            user-select: none;
+        }
+        .btn {
+            width: 60px; height: 60px; background: rgba(255,255,255,0.5);
+            border-radius: 10px; display: flex; align-items: center; justify-content: center;
+            font-weight: bold; font-size: 20px; touch-action: manipulation;
+        }
+        #score-board {
+            position: absolute; top: 10px; left: 10px; color: white;
+            background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px;
+        }
+        #prison-timer {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #ff0000; font-size: 40px; font-weight: bold; display: none;
+        }
     </style>
 </head>
 <body>
 
-<div id="score-ui">Doces: <span id="score">0</span></div>
+<div id="score-board">Doces: <span id="candy-count">0</span></div>
+<div id="prison-timer">PRESO NA BOLA! <span id="seconds">5</span>s</div>
+
+<div id="ui-controls">
+    <div></div><div class="btn" id="up">↑</div><div></div>
+    <div class="btn" id="left">←</div><div class="btn" id="down">↓</div><div class="btn" id="right">→</div>
+</div>
 
 <script type="importmap">
     { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
@@ -19,95 +45,214 @@
 
 <script type="module">
     import * as THREE from 'three';
-    // PlayroomKit: O "jeito fácil" que cria o online sem servidor
-    import { insertCoin, myPlayer, onPlayerJoin, useJoystick } from "https://unpkg.com/playroomkit/dist/index.js";
 
-    async function start() {
-        // 1. INICIALIZAR O ONLINE (Isso abre a tela de lobby automaticamente)
-        await insertCoin();
+    // --- CONFIGURAÇÕES BÁSICAS ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87CEEB);
+    
+    // Câmera Isométrica
+    const aspect = window.innerWidth / window.innerHeight;
+    const d = 10;
+    const camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 1, 1000);
+    camera.position.set(20, 20, 20);
+    camera.lookAt(0, 0, 0);
 
-        // --- SETUP SCENE ---
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87CEEB);
-        const camera = new THREE.OrthographicCamera(-12 * (window.innerWidth/window.innerHeight), 12 * (window.innerWidth/window.innerHeight), 12, -12, 1, 1000);
-        camera.position.set(20, 20, 20);
-        camera.lookAt(0, 0, 0);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        document.body.appendChild(renderer.domElement);
-        
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(10, 20, 10);
-        scene.add(light, new THREE.AmbientLight(0xffffff, 0.7));
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
 
-        // --- CENÁRIO ---
-        const island = new THREE.Mesh(new THREE.CylinderGeometry(15, 15, 1, 32), new THREE.MeshPhongMaterial({ color: 0xffffff }));
-        island.position.y = -0.5;
-        scene.add(island);
+    // Luzes
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    scene.add(ambientLight);
+    const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+    sunLight.position.set(10, 20, 10);
+    scene.add(sunLight);
 
-        // Prisão (Bola flutuante)
-        const prison = new THREE.Mesh(new THREE.SphereGeometry(2.5, 32, 32), new THREE.MeshPhongMaterial({ color: 0xadd8e6, transparent: true, opacity: 0.4 }));
-        prison.position.y = 8;
-        scene.add(prison);
+    // --- ELEMENTOS DO JOGO ---
+    
+    // Chão (Ilha de Neve)
+    const islandGeo = new THREE.CylinderGeometry(15, 15, 1, 32);
+    const islandMat = new THREE.MeshPhongMaterial({ color: 0xffffff });
+    const island = new THREE.Mesh(islandGeo, islandMat);
+    island.position.y = -0.5;
+    scene.add(island);
 
-        // --- LÓGICA DE JOGADORES ---
-        const players = [];
-        const createSnowman = (color) => {
-            const g = new THREE.Group();
-            const body = new THREE.Mesh(new THREE.SphereGeometry(0.6, 12, 12), new THREE.MeshPhongMaterial({ color }));
-            const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 12, 12), new THREE.MeshPhongMaterial({ color }));
-            head.position.y = 0.8;
-            g.add(body, head);
-            scene.add(g);
-            return g;
-        };
+    // Prisão (Bola de Gelo no topo)
+    const prisonGeo = new THREE.SphereGeometry(3, 32, 32);
+    const prisonMat = new THREE.MeshPhongMaterial({ color: 0xadd8e6, transparent: true, opacity: 0.5 });
+    const prison = new THREE.Mesh(prisonGeo, prisonMat);
+    prison.position.set(0, 10, 0);
+    scene.add(prison);
 
-        // Quando alguém entra (inclusive você)
-        onPlayerJoin((playerState) => {
-            const snowman = createSnowman(playerState.getProfile().color.hex);
-            const joystick = useJoystick(playerState); // Joystick automático para celular!
-            
-            players.push({ state: playerState, mesh: snowman, joystick });
-            
-            playerState.onQuit(() => {
-                scene.remove(snowman);
-                players.splice(players.indexOf(playerState), 1);
-            });
-        });
+    // Função Criar Boneco de Neve
+    function createSnowman(color = 0xffffff) {
+        const group = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.SphereGeometry(0.6, 16, 16), new THREE.MeshPhongMaterial({color}));
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), new THREE.MeshPhongMaterial({color}));
+        head.position.y = 0.8;
+        group.add(body, head);
+        return group;
+    }
 
-        // Carregar pontos do LocalStorage
-        let myScore = parseInt(localStorage.getItem('snowman_candy')) || 0;
-        document.getElementById('score').innerText = myScore;
+    const player = createSnowman(0xffffff);
+    scene.add(player);
 
-        // --- LOOP PRINCIPAL ---
-        function animate() {
-            requestAnimationFrame(animate);
+    const bot = createSnowman(0xcccccc);
+    bot.position.set(-5, 0, -5);
+    scene.add(bot);
 
-            players.forEach(({ state, mesh, joystick }) => {
-                // Se for o MEU boneco
-                if (state === myPlayer()) {
-                    const d = joystick.getValues();
-                    if (d.x !== 0 || d.y !== 0) {
-                        mesh.position.x += d.x * 0.15;
-                        mesh.position.z -= d.y * 0.15; // Invertido para o joystick
-                    }
-                    // Salva posição na rede para os outros verem
-                    state.setState("pos", { x: mesh.position.x, z: mesh.position.z });
-                } else {
-                    // Se for OUTRO player, só atualiza a posição que vem da rede
-                    const pos = state.getState("pos");
-                    if (pos) {
-                        mesh.position.lerp(new THREE.Vector3(pos.x, 0, pos.z), 0.2);
-                    }
+    // Estado do Jogador
+    let gameState = {
+        pos: { x: 0, z: 0 },
+        score: 0,
+        isFrozen: false,
+        powerUp: null, // 'ice' ou 'gas'
+        speed: 0.1
+    };
+
+    // Carregar do LocalStorage
+    const savedData = localStorage.getItem('snowman_save');
+    if(savedData) {
+        const data = JSON.parse(savedData);
+        gameState.score = data.score || 0;
+        document.getElementById('candy-count').innerText = gameState.score;
+    }
+
+    // --- SISTEMA DE DOCES E POWERUPS ---
+    const candies = [];
+    function spawnCandy() {
+        const candyGeo = new THREE.SphereGeometry(0.2, 8, 8);
+        const candyMat = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+        const candy = new THREE.Mesh(candyGeo, candyMat);
+        candy.position.set(Math.random()*20-10, 0.2, Math.random()*20-10);
+        scene.add(candy);
+        candies.push(candy);
+    }
+    for(let i=0; i<10; i++) spawnCandy();
+
+    // Power-ups
+    const powerUps = [];
+    function spawnPowerUp(type) {
+        const geo = type === 'ice' ? new THREE.BoxGeometry(0.5, 0.5, 0.5) : new THREE.CylinderGeometry(0.3, 0.3, 0.6);
+        const mat = new THREE.MeshPhongMaterial({ color: type === 'ice' ? 0x00ffff : 0xffa500 });
+        const p = new THREE.Mesh(geo, mat);
+        p.userData = { type };
+        p.position.set(Math.random()*15-7, 0.3, Math.random()*15-7);
+        scene.add(p);
+        powerUps.push(p);
+    }
+    spawnPowerUp('ice');
+    spawnPowerUp('gas');
+
+    // --- CONTROLES ---
+    const keys = {};
+    window.addEventListener('keydown', (e) => keys[e.key] = true);
+    window.addEventListener('keyup', (e) => keys[e.key] = false);
+
+    // Touch logic
+    const setupTouch = (id, key) => {
+        const btn = document.getElementById(id);
+        btn.addEventListener('touchstart', () => keys[key] = true);
+        btn.addEventListener('touchend', () => keys[key] = false);
+    };
+    setupTouch('up', 'ArrowUp'); setupTouch('down', 'ArrowDown');
+    setupTouch('left', 'ArrowLeft'); setupTouch('right', 'ArrowRight');
+
+    // --- LOOP PRINCIPAL ---
+    function animate() {
+        requestAnimationFrame(animate);
+
+        if (!gameState.isFrozen) {
+            // Movimentação
+            const speed = gameState.powerUp === 'gas' ? 0.2 : 0.1;
+            if (keys['ArrowUp']) player.position.z -= speed;
+            if (keys['ArrowDown']) player.position.z += speed;
+            if (keys['ArrowLeft']) player.position.x -= speed;
+            if (keys['ArrowRight']) player.position.x += speed;
+
+            // Colisão com Doces
+            candies.forEach((c, i) => {
+                if (player.position.distanceTo(c.position) < 0.8) {
+                    scene.remove(c);
+                    candies.splice(i, 1);
+                    gameState.score++;
+                    document.getElementById('candy-count').innerText = gameState.score;
+                    localStorage.setItem('snowman_save', JSON.stringify({score: gameState.score}));
+                    spawnCandy();
                 }
             });
 
-            renderer.render(scene, camera);
+            // Colisão com Power-ups
+            powerUps.forEach((p, i) => {
+                if (player.position.distanceTo(p.position) < 0.8) {
+                    gameState.powerUp = p.userData.type;
+                    scene.remove(p);
+                    powerUps.splice(i, 1);
+                    
+                    // Efeito visual simples
+                    if(gameState.powerUp === 'ice') player.scale.set(1.5, 1.5, 1.5);
+                    
+                    setTimeout(() => { 
+                        gameState.powerUp = null; 
+                        player.scale.set(1, 1, 1);
+                        spawnPowerUp(p.userData.type);
+                    }, 7000);
+                }
+            });
+
+            // Colisão Jogador vs Bot (Ataque de Gelo)
+            if (gameState.powerUp === 'ice' && player.position.distanceTo(bot.position) < 1.5) {
+                sendToPrison(bot);
+            }
         }
-        animate();
+
+        // IA Simples do Bot
+        if(bot.userData.inPrison) {
+            bot.position.y = 10;
+        } else {
+            bot.position.x += Math.sin(Date.now()*0.001)*0.05;
+            bot.position.y = 0;
+        }
+
+        renderer.render(scene, camera);
     }
 
-    start();
+    function sendToPrison(target) {
+        if(target.userData.inPrison) return;
+        target.userData.inPrison = true;
+        const timerUI = document.getElementById('prison-timer');
+        const secUI = document.getElementById('seconds');
+        
+        if(target === player) {
+            gameState.isFrozen = true;
+            timerUI.style.display = 'block';
+            let timeLeft = 5;
+            const interval = setInterval(() => {
+                timeLeft--;
+                secUI.innerText = timeLeft;
+                if(timeLeft <= 0) {
+                    clearInterval(interval);
+                    gameState.isFrozen = false;
+                    timerUI.style.display = 'none';
+                    player.position.set(0,0,0);
+                }
+            }, 1000);
+        } else {
+            // Bot na prisão
+            setTimeout(() => { target.userData.inPrison = false; }, 5000);
+        }
+    }
+
+    animate();
+
+    // Ajuste de tela
+    window.addEventListener('resize', () => {
+        const aspect = window.innerWidth / window.innerHeight;
+        camera.left = -d * aspect; camera.right = d * aspect;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
 </script>
 </body>
 </html>
